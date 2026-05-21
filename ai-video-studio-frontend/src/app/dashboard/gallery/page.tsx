@@ -12,7 +12,7 @@ export default function GalleryPage() {
     if (!userId) return;
     const fetchGallery = async () => {
       try {
-        const res = await fetch(`http://localhost:3001/video/gallery/${userId}`);
+        const res = await fetch(`https://ugcvideogenerator.onrender.com/video/gallery/${userId}`);
         const data = await res.json();
         if (data.success) setVideos(data.data);
       } catch (error) {
