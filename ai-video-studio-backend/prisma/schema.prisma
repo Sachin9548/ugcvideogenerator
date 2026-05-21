@@ -1,0 +1,36 @@
+// 1. Generator: Yeh humare liye NestJS mein use karne ke liye functions banayega
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 2. Datasource: Yeh Neon database se connect karega
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 3. User Model (Table)
+model User {
+  id        String   @id @default(cuid()) // Unique ID
+  clerkId   String   @unique              // Clerk wali ID
+  email     String   @unique              // User ki email
+  credits   Int      @default(100)        // Naye user ko 100 credits milenge
+  videos    Video[]                       // User ki banayi hui videos ka list
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 4. Video Model (Table)
+model Video {
+  id        String   @id @default(cuid())
+  prompt    String   // User ne kya likha tha
+  style     String   // 'cinematic' ya 'ugc'
+  status    String   @default("pending")  // pending, processing, completed, failed
+  videoUrl  String?  // Video banne ke baad ka AWS S3 URL (? ka matlab optional hai)
+  
+  // Relation: Yeh video kis user ki hai
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  
+  createdAt DateTime @default(now())
+}
