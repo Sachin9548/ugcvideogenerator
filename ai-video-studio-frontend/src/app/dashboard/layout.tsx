@@ -12,7 +12,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const fetchCredits = async () => {
     if (!userId) return;
     try {
-      const res = await fetch(`http://localhost:3001/video/user-data/${userId}`);
+      const res = await fetch(`https://ugcvideogenerator.onrender.com/video/user-data/${userId}`);
       const data = await res.json();
       if (data.success) setCredits(data.credits);
     } catch (error) {
