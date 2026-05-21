@@ -48,7 +48,7 @@ export default function DashboardPage() {
 
       console.log(`🚀 Sending ${mode} request to Backend...`);
       
-      const response = await fetch("http://localhost:3001/video/generate", {
+      const response = await fetch("https://ugcvideogenerator.onrender.com/video/generate", {
         method: "POST",
         body: formData, 
       });
