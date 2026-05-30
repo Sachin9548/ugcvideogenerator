@@ -5,8 +5,9 @@ const app_module_1 = require("./app.module");
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule, { rawBody: true });
     app.enableCors();
-    await app.listen(3001);
-    console.log('Backend is running on http://localhost:3001');
+    const port = process.env.PORT || 3001;
+    await app.listen(port, '0.0.0.0');
+    console.log(`🚀 Backend is live and running on port ${port}`);
 }
 bootstrap();
 //# sourceMappingURL=main.js.map

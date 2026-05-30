@@ -51,14 +51,21 @@ const groq_sdk_1 = __importDefault(require("groq-sdk"));
 const prisma_service_1 = require("../prisma/prisma.service");
 const jwt = __importStar(require("jsonwebtoken"));
 const genai_1 = require("@google/genai");
+const storage_service_1 = require("../storage/storage.service");
 let VideoService = class VideoService {
     prisma;
+    storageService;
     groq;
     gemini;
-    constructor(prisma) {
+    KLING_BASE_URL = 'https://api-singapore.klingai.com/v1/videos';
+    constructor(prisma, storageService) {
         this.prisma = prisma;
+        this.storageService = storageService;
         this.groq = new groq_sdk_1.default({ apiKey: process.env.GROQ_API_KEY });
         this.gemini = new genai_1.GoogleGenAI({ apiKey: process.env.GEMINI_KEY });
+    }
+    cleanBase64(base64) {
+        return base64.replace(/^data:image\/\w+;base64,/, '');
     }
     getKlingToken() {
         return jwt.sign({
@@ -152,7 +159,15 @@ let VideoService = class VideoService {
     }
     async combineImagesWithGemini(characterBase64, productBase64) {
         console.log('🎨 Calling Gemini API to combine images...');
-        const systemPrompt = `You are an expert image-generation engine. You must ALWAYS produce an image as Character with product holding in hand.`;
+        const systemPrompt = `You are a world-class high-end jewelry and UGC photographer. 
+    Your task is to seamlessly blend the provided 'Character' and 'Product' (Ring) images.
+    
+    CRITICAL RULES:
+    1. The product MUST retain its EXACT shape, color, diamond cut, and original design. DO NOT distort or change the ring.
+    2. Place the ring naturally on the woman's ring finger or let her hold her hand up near her face.
+    3. Keep the woman's face EXACTLY as it is in the original character photo.
+    4. Make the lighting focus beautifully on the product to make it pop and sparkle.
+    5. The final image must look like a real, casual iPhone 15 Pro selfie photo, not an AI generation.`;
         const response = await this.gemini.models.generateContent({
             model: 'gemini-3.1-flash-image-preview',
             contents: [
@@ -160,8 +175,8 @@ let VideoService = class VideoService {
                     role: 'user',
                     parts: [
                         { text: `Character with product` },
-                        { inlineData: { mimeType: 'image/jpeg', data: characterBase64 } },
-                        { inlineData: { mimeType: 'image/jpeg', data: productBase64 } },
+                        { inlineData: { mimeType: 'image/jpeg', data: this.cleanBase64(characterBase64) } },
+                        { inlineData: { mimeType: 'image/jpeg', data: this.cleanBase64(productBase64) } },
                     ],
                 },
             ],
@@ -202,31 +217,57 @@ let VideoService = class VideoService {
             throw new Error('AI failed to generate a valid script.');
         }
     }
-    async createUGCVideo(userId, topic, charBase64, prodBase64, quality, duration) {
+    async createUGCVideo(userId, topic, charBase64, prodBase64, quality, duration, engine = 'omni') {
         try {
             const combinedBase64 = await this.combineImagesWithGemini(charBase64, prodBase64);
+            const generatedImageFile = {
+                buffer: Buffer.from(combinedBase64, 'base64'),
+                originalname: 'generated-image.png',
+                mimetype: 'image/png',
+            };
+            const generatedImageUrl = await this.storageService.uploadFile(generatedImageFile, 'generated-images');
+            console.log('✅ Generated image saved:', generatedImageUrl);
             const storyboards = await this.generateUGCStoryboards(topic, duration);
             let klingMode = quality.includes('Pro') ? 'pro' : 'std';
-            console.log(`🎬 Calling Kling API (Omni V3) -> Mode: ${klingMode}, Duration: ${duration}s`);
-            const body = {
-                model_name: 'kling-v3-omni',
-                mode: klingMode,
-                aspect_ratio: '9:16',
-                duration: duration,
-                sound: 'on',
-                seed: 1066399786,
-                prompt: 'addictive hook ad',
-                image_list: [{ image_url: combinedBase64 }],
-                multi_shot: true,
-                shot_type: 'customize',
-                multi_prompt: storyboards,
-            };
-            const createRes = await fetch('https://api.klingai.com/v1/videos/omni-video', {
+            console.log(`🎬 Calling Kling API -> Engine: ${engine}, Mode: ${klingMode}, Duration: ${duration}s`);
+            let endpointUrl = '';
+            let body = {};
+            if (engine === 'omni') {
+                endpointUrl = 'https://api.klingai.com/v1/videos/omni-video';
+                body = {
+                    model_name: 'kling-v3-omni',
+                    mode: klingMode,
+                    aspect_ratio: '9:16',
+                    duration: duration,
+                    sound: 'on',
+                    seed: 1066399786,
+                    prompt: 'addictive hook ad',
+                    image_list: [{ image_url: combinedBase64 }],
+                    multi_shot: true,
+                    shot_type: 'customize',
+                    multi_prompt: storyboards,
+                };
+            }
+            else {
+                endpointUrl = 'https://api.klingai.com/v1/videos/image2video';
+                body = {
+                    model_name: 'kling-v3',
+                    mode: klingMode,
+                    aspect_ratio: '9:16',
+                    duration: duration,
+                    sound: 'on',
+                    seed: 1066399786,
+                    image: combinedBase64,
+                    prompt: 'Authentic jewelry UGC Instagram reel, real woman reviewing ring, natural home lighting, handheld iPhone camera, genuine emotions, stable medium shot, no extreme zoom, no morphing',
+                    negative_prompt: 'extreme close up, 360 rotation, studio lighting, fake sparkle effects, AI look, smooth camera, watermark, morphing',
+                    multi_shot: true,
+                    shot_type: 'customize',
+                    multi_prompt: storyboards,
+                };
+            }
+            const createRes = await fetch(endpointUrl, {
                 method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${this.getKlingToken()}`,
-                    'Content-Type': 'application/json',
-                },
+                headers: { Authorization: `Bearer ${this.getKlingToken()}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
             const createData = await createRes.json();
@@ -236,35 +277,41 @@ let VideoService = class VideoService {
             let finalVideoUrl = '';
             for (let i = 0; i < 80; i++) {
                 await new Promise((r) => setTimeout(r, 5000));
-                const pollRes = await fetch(`https://api.klingai.com/v1/videos/omni-video/${taskId}`, {
+                const pollUrl = engine === 'omni'
+                    ? `https://api.klingai.com/v1/videos/omni-video/${taskId}`
+                    : `https://api.klingai.com/v1/videos/image2video/${taskId}`;
+                const pollRes = await fetch(pollUrl, {
                     headers: { Authorization: `Bearer ${this.getKlingToken()}` },
                 });
                 const pollData = await pollRes.json();
                 const status = pollData.data?.task_status;
                 console.log(`[UGC Poll] Status: ${status} | ${Math.round((pollData.data?.task_progress || 0) * 100)}%`);
                 if (status === 'succeed') {
-                    finalVideoUrl = pollData.data.task_result.videos[0].url;
+                    const klingVideoUrl = pollData.data.task_result.videos[0].url;
+                    const response = await fetch(klingVideoUrl);
+                    const arrayBuffer = await response.arrayBuffer();
+                    const generatedVideoFile = {
+                        buffer: Buffer.from(arrayBuffer),
+                        originalname: 'generated-video.mp4',
+                        mimetype: 'video/mp4',
+                    };
+                    finalVideoUrl = await this.storageService.uploadFile(generatedVideoFile, 'generated-videos');
+                    console.log('✅ Generated video saved to S3:', finalVideoUrl);
                     break;
                 }
                 if (status === 'failed')
-                    throw new Error('Kling UGC Generation failed.');
+                    throw new Error(`Kling UGC Generation failed in ${engine} mode.`);
             }
-            let existingUser = await this.prisma.user.findUnique({
-                where: { clerkId: userId },
-            });
+            let existingUser = await this.prisma.user.findUnique({ where: { clerkId: userId } });
             if (!existingUser) {
                 existingUser = await this.prisma.user.create({
-                    data: {
-                        clerkId: userId,
-                        email: `${userId}@fallback.com`,
-                        credits: 0,
-                    },
+                    data: { clerkId: userId, email: `${userId}@fallback.com`, credits: 0 },
                 });
             }
             return await this.prisma.video.create({
                 data: {
                     prompt: topic,
-                    style: 'UGC',
+                    style: `UGC (${engine})`,
                     status: 'completed',
                     videoUrl: finalVideoUrl,
                     user: { connect: { clerkId: userId } },
@@ -280,6 +327,7 @@ let VideoService = class VideoService {
 exports.VideoService = VideoService;
 exports.VideoService = VideoService = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService,
+        storage_service_1.StorageService])
 ], VideoService);
 //# sourceMappingURL=video.service.js.map

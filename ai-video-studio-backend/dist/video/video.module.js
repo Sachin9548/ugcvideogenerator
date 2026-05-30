@@ -8,15 +8,22 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VideoModule = void 0;
 const common_1 = require("@nestjs/common");
+const bullmq_1 = require("@nestjs/bullmq");
 const video_controller_1 = require("./video.controller");
 const video_service_1 = require("./video.service");
+const video_processor_1 = require("./video.processor");
 let VideoModule = class VideoModule {
 };
 exports.VideoModule = VideoModule;
 exports.VideoModule = VideoModule = __decorate([
     (0, common_1.Module)({
+        imports: [
+            bullmq_1.BullModule.registerQueue({
+                name: 'video-queue',
+            }),
+        ],
         controllers: [video_controller_1.VideoController],
-        providers: [video_service_1.VideoService],
+        providers: [video_service_1.VideoService, video_processor_1.VideoProcessor],
     })
 ], VideoModule);
 //# sourceMappingURL=video.module.js.map

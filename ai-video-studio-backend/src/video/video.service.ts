@@ -3,16 +3,25 @@ import Groq from 'groq-sdk';
 import { PrismaService } from '../prisma/prisma.service';
 import * as jwt from 'jsonwebtoken';
 import { GoogleGenAI } from '@google/genai';
+import { StorageService } from '../storage/storage.service';
 
 @Injectable()
 export class VideoService {
   private groq: Groq;
   private gemini: GoogleGenAI;
-
-  constructor(private prisma: PrismaService) {
+  private readonly KLING_BASE_URL = 'https://api-singapore.klingai.com/v1/videos';
+  constructor(
+    private prisma: PrismaService,
+    private storageService: StorageService,
+  ) {
     this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
     this.gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_KEY });
   }
+
+  private cleanBase64(base64: string): string {
+    return base64.replace(/^data:image\/\w+;base64,/, '');
+  }
+
 
   private getKlingToken() {
     return jwt.sign(
@@ -26,9 +35,7 @@ export class VideoService {
     );
   }
 
-  // ==========================================
-  // TYPE 1: CINEMATIC VIDEO ENGINE (Real Kling API)
-  // ==========================================
+
   private async generateCinematicPrompt(topic: string) {
     const response = await this.groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
@@ -135,15 +142,21 @@ export class VideoService {
     }
   }
 
-  // ==========================================
-  // TYPE 2: UGC VIDEO ENGINE
-  // ==========================================
   private async combineImagesWithGemini(
     characterBase64: string,
     productBase64: string,
   ): Promise<string> {
     console.log('🎨 Calling Gemini API to combine images...');
-    const systemPrompt = `You are an expert image-generation engine. You must ALWAYS produce an image as Character with product holding in hand.`;
+
+    const systemPrompt = `You are a world-class high-end jewelry and UGC photographer. 
+    Your task is to seamlessly blend the provided 'Character' and 'Product' (Ring) images.
+    
+    CRITICAL RULES:
+    1. The product MUST retain its EXACT shape, color, diamond cut, and original design. DO NOT distort or change the ring.
+    2. Place the ring naturally on the woman's ring finger or let her hold her hand up near her face.
+    3. Keep the woman's face EXACTLY as it is in the original character photo.
+    4. Make the lighting focus beautifully on the product to make it pop and sparkle.
+    5. The final image must look like a real, casual iPhone 15 Pro selfie photo, not an AI generation.`;
 
     const response = await this.gemini.models.generateContent({
       model: 'gemini-3.1-flash-image-preview',
@@ -152,8 +165,8 @@ export class VideoService {
           role: 'user',
           parts: [
             { text: `Character with product` },
-            { inlineData: { mimeType: 'image/jpeg', data: characterBase64 } },
-            { inlineData: { mimeType: 'image/jpeg', data: productBase64 } },
+            { inlineData: { mimeType: 'image/jpeg', data: this.cleanBase64(characterBase64) } },
+            { inlineData: { mimeType: 'image/jpeg', data: this.cleanBase64(productBase64) } },
           ],
         },
       ],
@@ -168,20 +181,19 @@ export class VideoService {
       (p: any) => p.inlineData,
     );
 
-    // 👇 TS Strict Mode Fix: Check if everything exists before returning
     if (!imagePart || !imagePart.inlineData || !imagePart.inlineData.data) {
-      throw new Error(
-        'Gemini failed to generate image or returned undefined data.',
-      );
+      throw new Error('Gemini failed to generate image or returned undefined data.');
     }
 
     return imagePart.inlineData.data;
   }
+
+
   private async generateUGCStoryboards(topic: string, duration: string) {
     console.log(
       `🧠 Groq is writing UGC Storyboard for: ${topic} (${duration}s)`,
     );
-    // AI ko clearly bata rahe hain ki duration split karni hai
+
     const systemPrompt = `You are a UGC Video Director. The user wants to sell: "${topic}". Total video duration is exactly ${duration} seconds.
     Create a multi-shot storyboard. The SUM of all "duration" fields MUST be exactly ${duration}.
     Output exactly in this JSON array format:
@@ -217,44 +229,69 @@ export class VideoService {
     prodBase64: string,
     quality: string,
     duration: string,
+    engine: 'omni' | 'standard' = 'omni'
   ) {
     try {
-      const combinedBase64 = await this.combineImagesWithGemini(
-        charBase64,
-        prodBase64,
-      );
+      // 1. Gemini Image Generation & S3 Save
+      const combinedBase64 = await this.combineImagesWithGemini(charBase64, prodBase64);
+      const generatedImageFile = {
+        buffer: Buffer.from(combinedBase64, 'base64'),
+        originalname: 'generated-image.png',
+        mimetype: 'image/png',
+      };
+      const generatedImageUrl = await this.storageService.uploadFile(generatedImageFile, 'generated-images');
+      console.log('✅ Generated image saved:', generatedImageUrl);
+
+      // 2. Groq Storyboards
       const storyboards = await this.generateUGCStoryboards(topic, duration);
 
       let klingMode = quality.includes('Pro') ? 'pro' : 'std';
-      console.log(
-        `🎬 Calling Kling API (Omni V3) -> Mode: ${klingMode}, Duration: ${duration}s`,
-      );
+      console.log(`🎬 Calling Kling API -> Engine: ${engine}, Mode: ${klingMode}, Duration: ${duration}s`);
 
-      const body = {
-        model_name: 'kling-v3-omni',
-        mode: klingMode,
-        aspect_ratio: '9:16',
-        duration: duration,
-        sound: 'on',
-        seed: 1066399786,
-        prompt: 'addictive hook ad',
-        image_list: [{ image_url: combinedBase64 }],
-        multi_shot: true,
-        shot_type: 'customize',
-        multi_prompt: storyboards,
-      };
+      // 👇 DYNAMIC PAYLOAD & ENDPOINT BASED ON ENGINE
+      let endpointUrl = '';
+      let body: any = {};
 
-      const createRes = await fetch(
-        'https://api.klingai.com/v1/videos/omni-video',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${this.getKlingToken()}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(body),
-        },
-      );
+      if (engine === 'omni') {
+        endpointUrl = 'https://api.klingai.com/v1/videos/omni-video';
+        body = {
+          model_name: 'kling-v3-omni',
+          mode: klingMode,
+          aspect_ratio: '9:16',
+          duration: duration,
+          sound: 'on',
+          seed: 1066399786,
+          prompt: 'addictive hook ad',
+          image_list: [{ image_url: combinedBase64 }],
+          multi_shot: true,
+          shot_type: 'customize',
+          multi_prompt: storyboards,
+        };
+      } else {
+        // STANDARD MODE (Image2Video - Safe Pattern)
+        endpointUrl = 'https://api.klingai.com/v1/videos/image2video';
+        body = {
+          model_name: 'kling-v3', // User script matched v3
+          mode: klingMode,
+          aspect_ratio: '9:16',
+          duration: duration,
+          sound: 'on',
+          seed: 1066399786,
+          image: combinedBase64, // Image2video uses 'image' string, not array
+          prompt: 'Authentic jewelry UGC Instagram reel, real woman reviewing ring, natural home lighting, handheld iPhone camera, genuine emotions, stable medium shot, no extreme zoom, no morphing',
+          negative_prompt: 'extreme close up, 360 rotation, studio lighting, fake sparkle effects, AI look, smooth camera, watermark, morphing',
+          multi_shot: true,
+          shot_type: 'customize',
+          multi_prompt: storyboards,
+        };
+      }
+
+      // 3. Create Task
+      const createRes = await fetch(endpointUrl, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.getKlingToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
 
       const createData = await createRes.json();
       if (createData.code !== 0) throw new Error(JSON.stringify(createData));
@@ -262,45 +299,52 @@ export class VideoService {
       const taskId = createData.data.task_id;
       let finalVideoUrl = '';
 
+      // 4. Polling Loop
       for (let i = 0; i < 80; i++) {
         await new Promise((r) => setTimeout(r, 5000));
-        const pollRes = await fetch(
-          `https://api.klingai.com/v1/videos/omni-video/${taskId}`,
-          {
-            headers: { Authorization: `Bearer ${this.getKlingToken()}` },
-          },
-        );
+
+        // Polling URL bhi engine par depend karegi
+        const pollUrl = engine === 'omni'
+          ? `https://api.klingai.com/v1/videos/omni-video/${taskId}`
+          : `https://api.klingai.com/v1/videos/image2video/${taskId}`;
+
+        const pollRes = await fetch(pollUrl, {
+          headers: { Authorization: `Bearer ${this.getKlingToken()}` },
+        });
         const pollData = await pollRes.json();
         const status = pollData.data?.task_status;
-        console.log(
-          `[UGC Poll] Status: ${status} | ${Math.round((pollData.data?.task_progress || 0) * 100)}%`,
-        );
+        console.log(`[UGC Poll] Status: ${status} | ${Math.round((pollData.data?.task_progress || 0) * 100)}%`);
 
         if (status === 'succeed') {
-          finalVideoUrl = pollData.data.task_result.videos[0].url;
+          const klingVideoUrl = pollData.data.task_result.videos[0].url;
+
+          // Download and S3 Upload
+          const response = await fetch(klingVideoUrl);
+          const arrayBuffer = await response.arrayBuffer();
+          const generatedVideoFile = {
+            buffer: Buffer.from(arrayBuffer),
+            originalname: 'generated-video.mp4',
+            mimetype: 'video/mp4',
+          };
+          finalVideoUrl = await this.storageService.uploadFile(generatedVideoFile, 'generated-videos');
+          console.log('✅ Generated video saved to S3:', finalVideoUrl);
           break;
         }
-        if (status === 'failed')
-          throw new Error('Kling UGC Generation failed.');
+        if (status === 'failed') throw new Error(`Kling UGC Generation failed in ${engine} mode.`);
       }
 
-      let existingUser = await this.prisma.user.findUnique({
-        where: { clerkId: userId },
-      });
+      // 5. Save to DB
+      let existingUser = await this.prisma.user.findUnique({ where: { clerkId: userId } });
       if (!existingUser) {
         existingUser = await this.prisma.user.create({
-          data: {
-            clerkId: userId,
-            email: `${userId}@fallback.com`,
-            credits: 0,
-          },
+          data: { clerkId: userId, email: `${userId}@fallback.com`, credits: 0 },
         });
       }
 
       return await this.prisma.video.create({
         data: {
           prompt: topic,
-          style: 'UGC',
+          style: `UGC (${engine})`, // UI me dikhega kaunsa model use hua
           status: 'completed',
           videoUrl: finalVideoUrl,
           user: { connect: { clerkId: userId } },
@@ -308,9 +352,7 @@ export class VideoService {
       });
     } catch (error: any) {
       console.error('❌ UGC Error:', error);
-      throw new InternalServerErrorException(
-        error.message || 'Failed to generate UGC video',
-      );
+      throw new InternalServerErrorException(error.message || 'Failed to generate UGC video');
     }
   }
 }

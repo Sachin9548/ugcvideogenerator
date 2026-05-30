@@ -12,6 +12,8 @@ import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { VideoService } from './video.service';
 import { StorageService } from '../storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 
 @Controller('video')
 export class VideoController {
@@ -19,6 +21,8 @@ export class VideoController {
     private readonly videoService: VideoService,
     private readonly storageService: StorageService,
     private readonly prisma: PrismaService,
+    @InjectQueue('video-queue') private readonly videoQueue: Queue,
+
   ) {}
 
   @Get('user-data/:userId')
@@ -34,10 +38,14 @@ export class VideoController {
     return { success: true, credits: user.credits };
   }
 
-  @Get('gallery/:userId')
+@Get('gallery/:userId')
   async getUserGallery(@Param('userId') userId: string) {
     const videos = await this.prisma.video.findMany({
-      where: { userId: userId },
+      where: { 
+        user: {
+          clerkId: userId 
+        }
+      },
       orderBy: { createdAt: 'desc' },
     });
     return { success: true, data: videos };
@@ -51,7 +59,6 @@ export class VideoController {
     ]),
   )
   async generateVideo(
-    // 👇 Quality aur Duration add kiye gaye hain
     @Body()
     body: {
       userId: string;
@@ -59,10 +66,12 @@ export class VideoController {
       mode: string;
       quality: string;
       duration: string;
+      engine: 'omni' | 'standard';
+      
     },
     @UploadedFiles() files: { characterImage?: any[]; productImage?: any[] },
   ) {
-    const { userId, topic, mode, quality, duration } = body;
+    const { userId, topic, mode, quality, duration, engine } = body;
 
     const user = await this.prisma.user.findUnique({
       where: { clerkId: userId },
@@ -104,6 +113,7 @@ export class VideoController {
           prodBase64,
           quality,
           duration,
+          engine,
         );
       }
 
@@ -131,4 +141,33 @@ export class VideoController {
     });
     return { success: true, message: 'Recharged 50 credits!' };
   }
+
+
+  @Post('generate-advanced')
+  @UseInterceptors(FileFieldsInterceptor([{ name: 'image', maxCount: 1 }]))
+  async generateAdvancedVideo(
+    @Body() body: { userId: string; prompt: string; advancedMode: string; engine: string },
+    @UploadedFiles() files: { image?: any[] },
+  ) {
+    const { userId, prompt, advancedMode, engine } = body;
+
+    const user = await this.prisma.user.findUnique({ where: { clerkId: userId } });
+    if (!user || user.credits < 5) throw new BadRequestException('INSUFFICIENT_CREDITS');
+
+    let uploadedImageUrl: string | null = null; 
+    
+    if (files && files.image) {
+      uploadedImageUrl = await this.storageService.uploadFile(files.image[0], 'advanced-assets');
+    }
+
+    const job = await this.videoQueue.add('generate-advanced-job', {
+      userId, prompt, advancedMode, engine, uploadedImageUrl
+    });
+
+    await this.prisma.user.update({ where: { clerkId: userId }, data: { credits: { decrement: 5 } } });
+
+    return { success: true, message: 'Advanced Job added to queue', jobId: job.id };
+  }
+
 }
+

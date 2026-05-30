@@ -22,7 +22,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   // Aapko dev test ke liye free credits dega
   const handleDevRecharge = async () => {
-    await fetch(`http://localhost:3001/video/dev-recharge/${userId}`);
+    await fetch(`https://ugcvideogenerator.onrender.com/video/dev-recharge/${userId}`);
     fetchCredits();
     alert("💸 50 Test Credits Added Successfully!");
   };
@@ -45,6 +45,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link href="/dashboard" className="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition">
             <span></span> Studio
           </Link>
+            <Link href="/dashboard/advanced" className="flex items-center gap-3 px-4 py-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 font-medium transition">
+            <span>🚀</span> Advanced Studio
+          </Link>
+
           <Link href="/dashboard/gallery" className="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition">
             <span></span> My Gallery
           </Link>

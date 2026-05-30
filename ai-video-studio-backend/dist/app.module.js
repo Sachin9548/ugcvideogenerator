@@ -13,6 +13,7 @@ const prisma_module_1 = require("./prisma/prisma.module");
 const webhooks_module_1 = require("./webhooks/webhooks.module");
 const video_module_1 = require("./video/video.module");
 const storage_module_1 = require("./storage/storage.module");
+const bullmq_1 = require("@nestjs/bullmq");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -20,6 +21,11 @@ exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
         imports: [
             config_1.ConfigModule.forRoot({ isGlobal: true }),
+            bullmq_1.BullModule.forRoot({
+                connection: {
+                    url: process.env.REDIS_URL,
+                },
+            }),
             prisma_module_1.PrismaModule,
             webhooks_module_1.WebhooksModule,
             video_module_1.VideoModule,

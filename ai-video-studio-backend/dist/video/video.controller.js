@@ -18,14 +18,18 @@ const platform_express_1 = require("@nestjs/platform-express");
 const video_service_1 = require("./video.service");
 const storage_service_1 = require("../storage/storage.service");
 const prisma_service_1 = require("../prisma/prisma.service");
+const bullmq_1 = require("@nestjs/bullmq");
+const bullmq_2 = require("bullmq");
 let VideoController = class VideoController {
     videoService;
     storageService;
     prisma;
-    constructor(videoService, storageService, prisma) {
+    videoQueue;
+    constructor(videoService, storageService, prisma, videoQueue) {
         this.videoService = videoService;
         this.storageService = storageService;
         this.prisma = prisma;
+        this.videoQueue = videoQueue;
     }
     async getUserData(userId) {
         let user = await this.prisma.user.findUnique({
@@ -40,13 +44,17 @@ let VideoController = class VideoController {
     }
     async getUserGallery(userId) {
         const videos = await this.prisma.video.findMany({
-            where: { userId: userId },
+            where: {
+                user: {
+                    clerkId: userId
+                }
+            },
             orderBy: { createdAt: 'desc' },
         });
         return { success: true, data: videos };
     }
     async generateVideo(body, files) {
-        const { userId, topic, mode, quality, duration } = body;
+        const { userId, topic, mode, quality, duration, engine } = body;
         const user = await this.prisma.user.findUnique({
             where: { clerkId: userId },
         });
@@ -69,7 +77,7 @@ let VideoController = class VideoController {
                     .catch(console.error);
                 const charBase64 = files.characterImage[0].buffer.toString('base64');
                 const prodBase64 = files.productImage[0].buffer.toString('base64');
-                videoData = await this.videoService.createUGCVideo(userId, topic, charBase64, prodBase64, quality, duration);
+                videoData = await this.videoService.createUGCVideo(userId, topic, charBase64, prodBase64, quality, duration, engine);
             }
             await this.prisma.user.update({
                 where: { clerkId: userId },
@@ -92,6 +100,21 @@ let VideoController = class VideoController {
             data: { credits: { increment: 50 } },
         });
         return { success: true, message: 'Recharged 50 credits!' };
+    }
+    async generateAdvancedVideo(body, files) {
+        const { userId, prompt, advancedMode, engine } = body;
+        const user = await this.prisma.user.findUnique({ where: { clerkId: userId } });
+        if (!user || user.credits < 5)
+            throw new common_1.BadRequestException('INSUFFICIENT_CREDITS');
+        let uploadedImageUrl = null;
+        if (files && files.image) {
+            uploadedImageUrl = await this.storageService.uploadFile(files.image[0], 'advanced-assets');
+        }
+        const job = await this.videoQueue.add('generate-advanced-job', {
+            userId, prompt, advancedMode, engine, uploadedImageUrl
+        });
+        await this.prisma.user.update({ where: { clerkId: userId }, data: { credits: { decrement: 5 } } });
+        return { success: true, message: 'Advanced Job added to queue', jobId: job.id };
     }
 };
 exports.VideoController = VideoController;
@@ -128,10 +151,21 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], VideoController.prototype, "devRecharge", null);
+__decorate([
+    (0, common_1.Post)('generate-advanced'),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileFieldsInterceptor)([{ name: 'image', maxCount: 1 }])),
+    __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.UploadedFiles)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], VideoController.prototype, "generateAdvancedVideo", null);
 exports.VideoController = VideoController = __decorate([
     (0, common_1.Controller)('video'),
+    __param(3, (0, bullmq_1.InjectQueue)('video-queue')),
     __metadata("design:paramtypes", [video_service_1.VideoService,
         storage_service_1.StorageService,
-        prisma_service_1.PrismaService])
+        prisma_service_1.PrismaService,
+        bullmq_2.Queue])
 ], VideoController);
 //# sourceMappingURL=video.controller.js.map

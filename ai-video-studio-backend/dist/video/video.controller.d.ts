@@ -1,11 +1,13 @@
 import { VideoService } from './video.service';
 import { StorageService } from '../storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { Queue } from 'bullmq';
 export declare class VideoController {
     private readonly videoService;
     private readonly storageService;
     private readonly prisma;
-    constructor(videoService: VideoService, storageService: StorageService, prisma: PrismaService);
+    private readonly videoQueue;
+    constructor(videoService: VideoService, storageService: StorageService, prisma: PrismaService, videoQueue: Queue);
     getUserData(userId: string): Promise<{
         success: boolean;
         credits: number;
@@ -14,11 +16,11 @@ export declare class VideoController {
         success: boolean;
         data: {
             id: string;
+            createdAt: Date;
             prompt: string;
             style: string;
             status: string;
             videoUrl: string | null;
-            createdAt: Date;
             userId: string;
         }[];
     }>;
@@ -28,6 +30,7 @@ export declare class VideoController {
         mode: string;
         quality: string;
         duration: string;
+        engine: 'omni' | 'standard';
     }, files: {
         characterImage?: any[];
         productImage?: any[];
@@ -39,5 +42,17 @@ export declare class VideoController {
     devRecharge(userId: string): Promise<{
         success: boolean;
         message: string;
+    }>;
+    generateAdvancedVideo(body: {
+        userId: string;
+        prompt: string;
+        advancedMode: string;
+        engine: string;
+    }, files: {
+        image?: any[];
+    }): Promise<{
+        success: boolean;
+        message: string;
+        jobId: string | undefined;
     }>;
 }
